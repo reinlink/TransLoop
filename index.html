@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="auto">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>译环 · TransLoop</title>
+<link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+<div class="shell">
+  <nav class="rail">
+    <button class="rail-btn is-active" data-view="text" title="翻译">
+      <svg viewBox="0 0 24 24"><path d="M4 5h9M8 3v2c0 4-2 7-5 8m3-4c0 3 2 5 5 6"/><path d="M13 20l4-10 4 10m-6.5-3h5"/></svg>
+    </button>
+    <button class="rail-btn" data-view="files" title="文件">
+      <svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>
+    </button>
+    <span class="rail-sep"></span>
+    <button class="rail-btn" data-drawer="gloss" id="glossBtn" title="术语表">
+      <svg viewBox="0 0 24 24"><path d="M5 4h9a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/><path d="M17 7h2v13H8"/><path d="M8 8h6M8 12h6"/></svg>
+    </button>
+    <button class="rail-btn" data-drawer="api" id="apiBtn" title="API">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
+      <i class="dot" id="apiDot"></i>
+    </button>
+    <button class="rail-btn" data-drawer="misc" title="设置">
+      <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 12h4M12 12h8M4 17h12M20 17h0"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="17" r="2"/></svg>
+    </button>
+    <div class="rail-fill"></div>
+    <button class="rail-btn" id="themeBtn" title="主题">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></svg>
+    </button>
+  </nav>
+
+  <div class="export-menu" id="exportMenu" hidden>
+    <label class="check"><input type="checkbox" id="expSrc" /> 原文</label>
+    <label class="check"><input type="checkbox" id="expTgt" checked /> 译文</label>
+    <label class="check"><input type="checkbox" id="expBack" /> 回译</label>
+    <button id="expDo" class="primary">导出</button>
+  </div>
+
+  <div class="theme-menu" id="themeMenu" hidden>
+    <button data-theme-opt="auto">跟随系统</button>
+    <button data-theme-opt="light">亮色</button>
+    <button data-theme-opt="dark">暗色</button>
+  </div>
+
+  <button id="fileDrawerToggle" class="rail-edge hidden" title="文件库">›</button>
+
+  <div class="bubble" id="apiBubble" hidden>API 未连接</div>
+
+  <main class="stage">
+    <header class="bar">
+      <div class="pair">
+        <select id="srcLang"></select>
+        <button id="swapLangs" class="mini" title="交换语言">⇄</button>
+        <select id="tgtLang"></select>
+      </div>
+      <div class="actions" id="textActions">
+        <button id="splitBtn">切分</button>
+        <button id="translateAll" class="primary">翻译全部</button>
+        <button id="backAll">回译全部</button>
+        <button id="fillBackText">原文填充回译</button>
+        <button id="exportText" class="ghost">导出</button>
+        <button id="clearAll" class="ghost">清空</button>
+      </div>
+      <div class="actions hidden" id="fileActions">
+        <button id="importBtn">导入文件</button>
+        <button id="translateFile" class="primary">翻译此文件</button>
+        <button id="translateAllFiles">翻译全部文件</button>
+        <button id="backFile">一键回译</button>
+        <button id="fillBackFile">原文填充回译</button>
+        <button id="exportFile" class="ghost">导出</button>
+        <span id="fileName" class="file-name"></span>
+      </div>
+      <span class="status" id="status"></span>
+    </header>
+
+    <textarea id="sourceInput" class="paste" spellcheck="false" placeholder="粘贴原文，Ctrl+Enter 翻译"></textarea>
+
+    <div class="table">
+      <div class="thead"><span>#</span><span>原文</span><span>译文</span><span>回译</span><span></span></div>
+      <div id="rows" class="rows"></div>
+      <p class="empty" id="empty">没有内容</p>
+    </div>
+
+    <input type="file" id="fileInput" multiple hidden />
+  </main>
+
+  <aside class="drawer" id="drawerApi" hidden>
+    <div class="drawer-head"><h2>API</h2><button class="close" data-close>×</button></div>
+    <div class="drawer-body">
+      <label>配置
+        <div class="inline">
+          <select id="profileSelect"></select>
+          <button id="newProfile" class="mini icon-btn" title="新建配置">
+            <svg viewBox="0 0 24 24"><path d="M9 3h8a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V8z"/><path d="M8 6.5v3M10.5 6.5v3M13 6.5v3"/></svg>
+          </button>
+          <button id="delProfile" class="mini icon-btn" title="删除配置">
+            <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13"/></svg>
+          </button>
+        </div>
+      </label>
+      <label>接口地址<input id="baseUrl" type="text" spellcheck="false" /></label>
+      <label>密钥<input id="apiKey" type="password" spellcheck="false" placeholder="可留空" /></label>
+      <label>模型
+        <div class="inline">
+          <select id="model"></select>
+          <button id="refreshModels" class="mini" title="刷新">↻</button>
+        </div>
+      </label>
+      <div class="inline">
+        <button id="testApi">测试连接</button>
+        <span class="hint" id="apiHint"></span>
+      </div>
+      <button id="saveProfile" class="primary wide">保存配置</button>
+    </div>
+  </aside>
+
+  <aside class="drawer" id="drawerMisc" hidden>
+    <div class="drawer-head"><h2>设置</h2><button class="close" data-close>×</button></div>
+    <div class="drawer-body">
+      <label class="range">温度 <output id="tempOut"></output><input id="temperature" type="range" min="0" max="2" step="0.05" /></label>
+      <label class="range">Top-P <output id="topPOut"></output><input id="topP" type="range" min="0" max="1" step="0.01" /></label>
+      <label>最大输出 token<input id="maxTokens" type="number" min="16" max="8192" step="16" /></label>
+      <label>并发请求<input id="concurrency" type="number" min="1" max="8" step="1" /></label>
+      <label>系统提示词<textarea id="systemPrompt" rows="8" spellcheck="false"></textarea></label>
+      <label class="check"><input id="protect" type="checkbox" /> ComfyUI 语法保护</label>
+      <label>分段方式</label>
+      <div class="seg-toggle" id="segmentToggle">
+        <button type="button" data-seg="original">原始分段</button>
+        <button type="button" data-seg="sentence">逐句分段</button>
+      </div>
+      <p class="section-label">导出样式</p>
+      <div class="seg-toggle" id="styleToggle">
+        <button type="button" data-style="block">成段导出</button>
+        <button type="button" data-style="sentence">逐句导出</button>
+      </div>
+      <button id="resetPrompt" class="ghost wide">恢复默认提示词</button>
+    </div>
+  </aside>
+
+  <aside class="drawer" id="drawerGloss" hidden>
+    <div class="drawer-head"><h2>术语表</h2><button class="close" data-close>×</button></div>
+    <div class="drawer-body">
+      <label class="check"><input id="glossOn" type="checkbox" /> 启用术语表</label>
+      <div id="glossList" class="gloss-list"></div>
+      <button id="glossAdd" class="ghost wide">添加术语</button>
+      <div class="inline">
+        <button id="glossImport" class="mini">导入 CSV</button>
+        <button id="glossExport" class="mini">导出 CSV</button>
+      </div>
+      <input type="file" id="glossFile" accept=".csv,.txt" hidden />
+    </div>
+  </aside>
+
+  <aside class="drawer" id="drawerFiles" hidden>
+    <div class="drawer-head"><h2>文件库</h2><span class="head-actions"><button id="clearFiles" class="mini ghost">清空</button><button class="close" data-close>×</button></span></div>
+    <div class="drawer-body" id="fileList"></div>
+  </aside>
+</div>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
