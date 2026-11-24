@@ -989,9 +989,14 @@ function exportFields() {
   return [];
 }
 
-function buildExport(list) {
+function isDeletedSegment(seg) {
+  return !String(seg.source || "").trim() && !String(seg.target || "").trim() && !String(seg.back || "").trim();
+}
+
+function buildExport(rawList) {
   const fields = exportFields();
   if (!fields.length) return "";
+  const list = rawList.filter((s) => !isDeletedSegment(s));
   const out = [];
 
   if (state.exportStyle === "sentence") {
@@ -1052,9 +1057,10 @@ function computeGaps() {
   const fields = exportFields();
   const report = {};
   for (const file of state.files) {
+    const live = file.segments.filter((s) => !isDeletedSegment(s));
     const reasons = [];
     for (const field of fields) {
-      const empty = file.segments.filter((s) => !String(s[field] || "").trim()).length;
+      const empty = live.filter((s) => !String(s[field] || "").trim()).length;
       if (empty) reasons.push(FIELD_LABEL[field] + " " + empty + " 处为空");
     }
     if (reasons.length) report[file.id] = reasons;
@@ -1131,7 +1137,7 @@ function makeZip(entries) {
 }
 
 function exportZip(files) {
-  const usable = files.filter((f) => f.segments.some((s) => String(s.source || "").trim()));
+  const usable = files.filter((f) => f.segments.some((s) => !isDeletedSegment(s)));
   if (!usable.length) { setStatus("没有可导出的文件", true); hideWarn(); return; }
   const encoder = new TextEncoder();
   const entries = usable.map((file) => ({
@@ -1172,7 +1178,8 @@ function doExportCurrent(list) {
   downloadText(base + ".txt", buildExport(list));
   $("exportMenu").hidden = true;
   hideWarn();
-  setStatus("已导出" + (list.length ? "（" + list.length + " 段）" : ""));
+  const count = list.filter((s) => !isDeletedSegment(s)).length;
+  setStatus("已导出" + (count ? "（" + count + " 段）" : ""));
 }
 
 function showWarn(rect, mode, rows, label) {
@@ -1198,6 +1205,7 @@ function exportCurrent() {
   if (!fields.length) { setStatus("至少选一项", true); return; }
   const bad = [];
   list.forEach((seg, index) => {
+    if (isDeletedSegment(seg)) return;
     const empty = fields.filter((f) => !String(seg[f] || "").trim());
     if (empty.length) bad.push({ index, empty });
   });
@@ -1334,7 +1342,9 @@ function bind() {
     if (state.warnMode === "current") {
       const file = activeFile();
       const fields = exportFields();
-      const list = (file ? file.segments : []).filter((s) => fields.every((f) => String(s[f] || "").trim()));
+      const list = (file ? file.segments : [])
+        .filter((s) => !isDeletedSegment(s))
+        .filter((s) => fields.every((f) => String(s[f] || "").trim()));
       doExportCurrent(list);
     } else {
       exportZip(state.files.filter((f) => !state.gapReport[f.id]));
