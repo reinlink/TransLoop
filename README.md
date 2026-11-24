@@ -1,11 +1,14 @@
 # 译环 · TransLoop
 
-一个跑在本机的轻量翻译工作台，接入任意大模型 OpenAI 兼容的 api 即可开始翻译。
+一个本地运行的轻量化翻译工作台，接入任意大模型 OpenAI 兼容的 api 即可开始翻译。
 
-- 地址：<http://127.0.0.1:8090>
-- 依赖：任何 OpenAI 兼容接口都可以接，默认接入本机运行的 llama-swap（`http://127.0.0.1:8081/v1`），llama-swap 需自行部署。
+- 部署地址：
+  - 本地部署打开 <http://127.0.0.1:8090> 。
+  - 在线版为本 GitHub pages 部署，点击[译环 · TransLoop](https://reinlink.github.io/TransLoop/)即可打开。
+- 模型接口：任何 OpenAI 兼容接口，默认接入本机运行的 llama-swap（`http://127.0.0.1:8081/v1`），亦可接入第三方提供商的模型，本地 llama-swap 需自行部署。
 
 # 示例图
+
 ![主页面](/Example-image/译环主页面.png)
 ![文档页](/Example-image/译环文档页.png)
 
