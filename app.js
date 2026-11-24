@@ -44,6 +44,7 @@ const state = {
   glossaryOn: true,
   files: [],
   activeFileId: "",
+  closedFolders: [],
   busy: false,
   apiOk: false
 };
@@ -81,9 +82,18 @@ function saveState() {
     exportCols: state.exportCols,
     textSegments: state.textSegments,
     files: state.files,
-    activeFileId: state.activeFileId
+    activeFileId: state.activeFileId,
+    closedFolders: state.closedFolders
   };
-  try { localStorage.setItem(STORE, JSON.stringify(data)); } catch {}
+  try {
+    localStorage.setItem(STORE, JSON.stringify(data));
+    storageWarned = false;
+  } catch {
+    if (!storageWarned) {
+      storageWarned = true;
+      setStatus("浏览器存储已满，请删除部分文件后再导入", true);
+    }
+  }
 }
 
 function loadState() {
@@ -102,8 +112,11 @@ function loadState() {
     state.textSegments = Array.isArray(raw.textSegments) ? raw.textSegments : [];
     state.files = Array.isArray(raw.files) ? raw.files : [];
     state.activeFileId = raw.activeFileId || (state.files[0] && state.files[0].id) || "";
+    state.closedFolders = Array.isArray(raw.closedFolders) ? raw.closedFolders : [];
   } catch {}
 }
+
+let storageWarned = false;
 
 const saveSoon = (() => { let t = 0; return () => { clearTimeout(t); t = setTimeout(saveState, 300); }; })();
 
@@ -518,32 +531,14 @@ function renderFiles() {
     p.className = "hint";
     p.textContent = "还没有导入文件";
     box.appendChild(p);
-  }
-  for (const f of state.files) {
-    const item = document.createElement("div");
-    item.className = "file-item" + (f.id === state.activeFileId ? " active" : "");
-    const name = document.createElement("div");
-    name.className = "name"; name.textContent = f.name;
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    const done = f.segments.filter((s) => s.target).length;
-    meta.textContent = done + "/" + f.segments.length + " 段";
-    const del = document.createElement("button");
-    del.className = "file-del";
-    del.textContent = "×";
-    del.title = "删除";
-    del.onclick = (e) => {
-      e.stopPropagation();
-      state.files = state.files.filter((x) => x.id !== f.id);
-      if (state.activeFileId === f.id) state.activeFileId = state.files[0] ? state.files[0].id : "";
-      renderAll(); saveSoon();
-    };
-    item.append(name, meta, del);
-    item.onclick = () => { state.activeFileId = f.id; renderAll(); saveSoon(); };
-    box.appendChild(item);
+  } else {
+    const list = document.createElement("ul");
+    list.className = "tree";
+    renderTree(buildFileTree(state.files), list, "");
+    box.appendChild(list);
   }
   const active = state.files.find((f) => f.id === state.activeFileId);
-  $("fileName").textContent = state.view === "files" && active ? active.name : "";
+  $("fileName").textContent = state.view === "files" && active ? (active.path || active.name) : "";
   updateEdge();
 }
 
@@ -699,27 +694,184 @@ function splitFileContent(name, text) {
   return splitText(text);
 }
 
-function addFiles(fileList) {
-  const count = fileList.length;
-  const readers = [];
-  for (const file of fileList) {
-    readers.push(new Promise((resolve) => {
-      const fr = new FileReader();
-      fr.onload = () => {
-        const text = String(fr.result || "");
-        const parts = splitFileContent(file.name, text);
-        state.files.push({ id: String(Date.now() + Math.random()), name: file.name, segments: toSegments(parts) });
-        resolve();
-      };
-      fr.onerror = () => resolve();
-      fr.readAsText(file, "utf-8");
-    }));
+const FILE_LIMIT = 300;
+const MAX_FILE_BYTES = 2 * 1024 * 1024;
+const TEXT_EXTENSIONS = new Set(["txt", "md", "markdown", "srt", "vtt"]);
+const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+function isSupportedFile(file) {
+  const ext = (file.name.split(".").pop() || "").toLowerCase();
+  return TEXT_EXTENSIONS.has(ext) && file.size <= MAX_FILE_BYTES;
+}
+
+function addFiles(batch) {
+  const entries = Array.isArray(batch) ? batch : batch.entries;
+  let skipped = Array.isArray(batch) ? 0 : (batch.skipped || 0);
+  if (!entries.length) {
+    setStatus(skipped ? "跳过 " + skipped + " 个非文本或超大文件" : "没有可导入的文件", true);
+    return;
   }
+  const supported = entries.filter((item) => isSupportedFile(item.file));
+  skipped += entries.length - supported.length;
+  if (!supported.length) {
+    setStatus("跳过 " + skipped + " 个非文本或超大文件", true);
+    return;
+  }
+  const room = FILE_LIMIT - state.files.length;
+  if (room <= 0) { setStatus("文件已达上限 " + FILE_LIMIT + " 个", true); return; }
+  const list = supported.slice(0, room);
+  const slots = new Array(list.length);
+  const readers = list.map((item, index) => new Promise((resolve) => {
+    const fr = new FileReader();
+    fr.onload = () => {
+      const text = String(fr.result || "");
+      slots[index] = {
+        id: String(Date.now()) + "-" + index + "-" + Math.random().toString(36).slice(2, 7),
+        name: item.file.name,
+        path: item.path || item.file.name,
+        segments: toSegments(splitFileContent(item.file.name, text))
+      };
+      resolve();
+    };
+    fr.onerror = () => resolve();
+    fr.readAsText(item.file, "utf-8");
+  }));
   Promise.all(readers).then(() => {
-    state.activeFileId = state.files[state.files.length - 1].id;
+    const added = slots.filter(Boolean);
+    state.files.push(...added);
+    if (added.length) state.activeFileId = added[0].id;
     renderAll(); saveSoon();
-    setStatus("已导入 " + count + " 个文件");
+    const notes = [];
+    if (skipped) notes.push("跳过 " + skipped + " 个非文本/超大文件");
+    if (supported.length > list.length) notes.push("超出上限已截断");
+    setStatus("已导入 " + added.length + " 个文件" + (notes.length ? "（" + notes.join("，") + "）" : ""));
   });
+}
+
+function filesFromInput(fileList) {
+  const entries = [];
+  let skipped = 0;
+  for (const file of fileList) {
+    if (!isSupportedFile(file)) { skipped += 1; continue; }
+    entries.push({ file, path: (file.webkitRelativePath || file.name).replace(/\\/g, "/") });
+  }
+  return { entries, skipped };
+}
+
+async function filesFromDataTransfer(dt) {
+  const items = [...(dt.items || [])].filter((i) => i.kind === "file" && i.webkitGetAsEntry);
+  if (!items.length) return filesFromInput(dt.files || []);
+  const out = [];
+  let skipped = 0;
+  const readEntry = (entry, prefix) => new Promise((resolve) => {
+    if (entry.isFile) {
+      entry.file((file) => {
+        if (!isSupportedFile(file)) { skipped += 1; resolve(); return; }
+        out.push({ file, path: prefix + entry.name });
+        resolve();
+      }, () => resolve());
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      const batch = [];
+      const readMore = () => reader.readEntries(async (part) => {
+        if (!part.length) {
+          for (const child of batch) await readEntry(child, prefix + entry.name + "/");
+          resolve();
+          return;
+        }
+        batch.push(...part);
+        readMore();
+      }, () => resolve());
+      readMore();
+    } else resolve();
+  });
+  for (const item of items) await readEntry(item.webkitGetAsEntry(), "");
+  return { entries: out, skipped };
+}
+
+function buildFileTree(files) {
+  const root = { folders: new Map(), files: [] };
+  for (const file of files) {
+    const parts = String(file.path || file.name).split("/");
+    let node = root;
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      if (!node.folders.has(parts[i])) node.folders.set(parts[i], { folders: new Map(), files: [] });
+      node = node.folders.get(parts[i]);
+    }
+    node.files.push(file);
+  }
+  return root;
+}
+
+function countTreeFiles(node) {
+  let total = node.files.length;
+  for (const child of node.folders.values()) total += countTreeFiles(child);
+  return total;
+}
+
+function renderTree(node, container, prefix) {
+  const folders = [...node.folders.keys()].sort((a, b) => nameCollator.compare(a, b));
+  const files = [...node.files].sort((a, b) => nameCollator.compare(a.name, b.name));
+
+  for (const name of folders) {
+    const full = prefix + name;
+    const child = node.folders.get(name);
+    const item = document.createElement("li");
+    const open = !state.closedFolders.includes(full);
+    item.className = "tree-folder" + (open ? " open" : "");
+
+    const head = document.createElement("div");
+    head.className = "tree-folder-head";
+    const arrow = document.createElement("span");
+    arrow.className = "tf-arrow";
+    arrow.textContent = "▶";
+    const label = document.createElement("span");
+    label.className = "tf-name";
+    label.textContent = name;
+    const count = document.createElement("span");
+    count.className = "tf-count";
+    count.textContent = countTreeFiles(child);
+    head.append(arrow, label, count);
+    head.onclick = () => {
+      const closing = item.classList.contains("open");
+      item.classList.toggle("open", !closing);
+      if (closing) { if (!state.closedFolders.includes(full)) state.closedFolders.push(full); }
+      else state.closedFolders = state.closedFolders.filter((p) => p !== full);
+      saveSoon();
+    };
+
+    const children = document.createElement("ul");
+    children.className = "tree-children";
+    renderTree(child, children, full + "/");
+    item.append(head, children);
+    container.appendChild(item);
+  }
+
+  for (const file of files) {
+    const item = document.createElement("li");
+    item.className = "tree-file" + (file.id === state.activeFileId ? " active" : "");
+    const label = document.createElement("span");
+    label.className = "f-name";
+    label.textContent = file.name;
+    label.title = file.path || file.name;
+    const meta = document.createElement("span");
+    meta.className = "f-meta";
+    const done = file.segments.filter((s) => s.target).length;
+    meta.textContent = done + "/" + file.segments.length;
+    const del = document.createElement("button");
+    del.className = "file-del";
+    del.textContent = "×";
+    del.title = "删除";
+    del.onclick = (e) => {
+      e.stopPropagation();
+      state.files = state.files.filter((x) => x.id !== file.id);
+      if (state.activeFileId === file.id) state.activeFileId = state.files[0] ? state.files[0].id : "";
+      renderAll(); saveSoon();
+    };
+    item.append(label, meta, del);
+    item.onclick = () => { state.activeFileId = file.id; renderAll(); saveSoon(); };
+    container.appendChild(item);
+  }
 }
 
 function exportFields() {
@@ -879,7 +1031,9 @@ function bind() {
   });
 
   $("importBtn").addEventListener("click", () => $("fileInput").click());
-  $("fileInput").addEventListener("change", (e) => { addFiles(e.target.files); e.target.value = ""; });
+  $("importFolder").addEventListener("click", () => $("folderInput").click());
+  $("fileInput").addEventListener("change", (e) => { addFiles(filesFromInput(e.target.files)); e.target.value = ""; });
+  $("folderInput").addEventListener("change", (e) => { addFiles(filesFromInput(e.target.files)); e.target.value = ""; });
 
   let resizeTimer = 0;
   window.addEventListener("resize", () => {
@@ -953,10 +1107,12 @@ function bind() {
 
   const main = $("sourceInput");
   document.addEventListener("dragover", (e) => { if (state.view === "files") e.preventDefault(); });
-  document.addEventListener("drop", (e) => {
+  document.addEventListener("drop", async (e) => {
     if (state.view !== "files") return;
     e.preventDefault();
-    if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files);
+    if (!e.dataTransfer) return;
+    const entries = await filesFromDataTransfer(e.dataTransfer);
+    addFiles(entries);
   });
 
   $("baseUrl").addEventListener("change", () => { state.settings.baseUrl = $("baseUrl").value.trim(); saveSoon(); checkApi(); });

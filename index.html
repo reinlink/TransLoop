@@ -67,6 +67,7 @@
       </div>
       <div class="actions hidden" id="fileActions">
         <button id="importBtn">导入文件</button>
+        <button id="importFolder">导入文件夹</button>
         <button id="translateFile" class="primary">翻译此文件</button>
         <button id="translateAllFiles">翻译全部文件</button>
         <button id="backFile">一键回译</button>
@@ -86,6 +87,7 @@
     </div>
 
     <input type="file" id="fileInput" multiple hidden />
+    <input type="file" id="folderInput" webkitdirectory multiple hidden />
   </main>
 
   <aside class="drawer" id="drawerApi" hidden>

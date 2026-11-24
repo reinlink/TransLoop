@@ -210,14 +210,33 @@ input[type=checkbox] { accent-color: var(--accent); }
 }
 .hint.err { color: var(--danger); }
 
-.file-item {
-  position: relative; padding: 9px 30px 9px 10px;
-  border: 1px solid var(--line); border-radius: 9px; margin-bottom: 8px; cursor: pointer;
+.tree { list-style: none; margin: 0; padding: 0; }
+.tree-children { list-style: none; margin: 0; padding-left: 12px; display: none; }
+.tree-folder.open > .tree-children { display: block; }
+.tree-folder-head {
+  display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 8px;
+  cursor: pointer; color: var(--muted); font-size: 12px; user-select: none;
 }
+.tree-folder-head:hover { background: var(--bg-soft); color: var(--text); }
+.tf-arrow { width: 12px; text-align: center; transition: transform .15s ease; display: inline-block; }
+.tree-folder.open > .tree-folder-head .tf-arrow { transform: rotate(90deg); }
+.tf-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tf-count { font-size: 11px; color: var(--muted); }
+.tree-file {
+  position: relative; display: flex; align-items: center; gap: 6px;
+  padding: 7px 26px 7px 8px; border-radius: 8px; cursor: pointer; font-size: 13px;
+}
+.tree-file:hover { background: var(--bg-soft); }
+.tree-file.active { background: var(--accent-weak); }
+.tree-file.active .f-name { color: var(--accent); font-weight: 600; }
+.f-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.f-meta { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .file-del {
-  position: absolute; right: 6px; top: 6px; width: 20px; height: 20px; padding: 0;
-  border: 0; background: transparent; color: var(--muted); font-size: 15px; line-height: 1;
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  width: 20px; height: 20px; padding: 0; border: 0; background: transparent;
+  color: var(--muted); font-size: 14px; line-height: 1; opacity: 0;
 }
+.tree-file:hover .file-del { opacity: 1; }
 .file-del:hover { color: var(--danger); }
 .head-actions { display: flex; align-items: center; gap: 6px; }
 .file-item.active { border-color: var(--accent); background: var(--accent-weak); }
