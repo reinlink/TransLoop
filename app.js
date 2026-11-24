@@ -45,6 +45,11 @@ const state = {
   files: [],
   activeFileId: "",
   closedFolders: [],
+  gapReport: {},
+  warnMode: "all",
+  scope: { translate: "current", back: "current" },
+  controller: null,
+  aborted: false,
   busy: false,
   apiOk: false
 };
@@ -83,7 +88,8 @@ function saveState() {
     textSegments: state.textSegments,
     files: state.files,
     activeFileId: state.activeFileId,
-    closedFolders: state.closedFolders
+    closedFolders: state.closedFolders,
+    scope: state.scope
   };
   try {
     localStorage.setItem(STORE, JSON.stringify(data));
@@ -113,6 +119,7 @@ function loadState() {
     state.files = Array.isArray(raw.files) ? raw.files : [];
     state.activeFileId = raw.activeFileId || (state.files[0] && state.files[0].id) || "";
     state.closedFolders = Array.isArray(raw.closedFolders) ? raw.closedFolders : [];
+    state.scope = { translate: "current", back: "current", ...(raw.scope || {}) };
   } catch {}
 }
 
@@ -331,7 +338,7 @@ function fillModels(ids) {
   sel.value = state.settings.model;
 }
 
-async function chat(text, direction, nudge) {
+async function chat(text, direction, nudge, signal) {
   const src = LANGS.find((l) => l.code === state.settings.src)?.name || state.settings.src;
   const tgt = LANGS.find((l) => l.code === state.settings.tgt)?.name || state.settings.tgt;
   const from = direction === "back" ? tgt : src;
@@ -352,7 +359,8 @@ async function chat(text, direction, nudge) {
       top_p: Number(state.settings.topP),
       max_tokens: Number(state.settings.maxTokens),
       stream: false
-    })
+    }),
+    signal
   });
   if (!res.ok) throw new Error("HTTP " + res.status);
   const data = await res.json();
@@ -371,55 +379,129 @@ function glossaryBlock(direction) {
   return "术语对照，遇到左侧词必须使用右侧译法：\n" + lines;
 }
 
-async function translateSegment(seg, direction) {
+async function translateSegment(seg, direction, signal) {
   const input = direction === "back" ? seg.target : seg.source;
   const bundle = state.settings.protect ? protectComfy(input) : { text: input, tokens: [] };
-  let out = await chat(bundle.text, direction);
-  if (normalize(out) === normalize(bundle.text)) out = await chat(bundle.text, direction, ECHO_NUDGE);
+  let out = await chat(bundle.text, direction, "", signal);
+  if (normalize(out) === normalize(bundle.text)) out = await chat(bundle.text, direction, ECHO_NUDGE, signal);
   let restored = restoreComfy(out, bundle.tokens);
   const lost = missingTokens(restored, bundle.tokens);
   if (lost.length) {
-    const retry = await chat(bundle.text, direction, "必须原样保留这些片段：" + lost.join(" "));
+    const retry = await chat(bundle.text, direction, "必须原样保留这些片段：" + lost.join(" "), signal);
     const retried = restoreComfy(retry, bundle.tokens);
     if (missingTokens(retried, bundle.tokens).length < lost.length) restored = retried;
   }
   return { text: restored, lost: missingTokens(restored, bundle.tokens).length };
 }
 
-async function runOn(list, indexes, direction) {
-  if (state.busy) return;
-  if (!indexes.length) return;
-  state.busy = true;
-  setStatus((direction === "back" ? "回译" : "翻译") + " 0/" + indexes.length);
+function activeFile() {
+  return state.files.find((f) => f.id === state.activeFileId) || null;
+}
+
+/* 断点接续：同一段落 + 同一参数 + 同一方向，做过就不再请求 */
+function paramSignature() {
+  return [
+    state.settings.model, state.settings.src, state.settings.tgt,
+    state.settings.temperature, state.settings.topP,
+    state.settings.protect ? "p1" : "p0",
+    state.settings.glossaryOn ? "g1" : "g0",
+    state.settings.systemPrompt
+  ].join("¦");
+}
+
+function memoKey(seg, direction) {
+  const input = direction === "back" ? seg.target : seg.source;
+  return [paramSignature(), direction, String(input || "")].join("¦");
+}
+
+function isMemoHit(seg, direction) {
+  return Boolean(seg.memo && seg.memo[direction] === memoKey(seg, direction));
+}
+
+async function translateOne(seg, direction, signal) {
+  if (isMemoHit(seg, direction)) return;
+  seg.status = "…"; seg.error = false; renderAll();
+  try {
+    const r = await translateSegment(seg, direction, signal);
+    if (direction === "back") seg.back = r.text; else seg.target = r.text;
+    const same = direction === "forward"
+      ? normalize(seg.target) === normalize(seg.source)
+      : normalize(seg.back) === normalize(seg.target);
+    seg.status = r.lost ? "占位符丢失" : same ? "原样返回" : "";
+    seg.error = Boolean(r.lost || same);
+    seg.memo = { ...(seg.memo || {}), [direction]: memoKey(seg, direction) };
+  } catch (e) {
+    if (e && e.name === "AbortError") { seg.status = "已中断"; return; }
+    seg.status = "失败"; seg.error = true;
+  }
+  renderAll(); saveSoon();
+}
+
+async function runTasks(tasks, direction) {
+  if (state.busy || !tasks.length) return;
+  state.busy = true; state.aborted = false;
+  const controller = new AbortController();
+  state.controller = controller;
+  $("abortBtn").classList.remove("hidden");
   let done = 0;
   let cursor = 0;
   const limit = Math.max(1, Number(state.settings.concurrency) || 1);
+  const label = direction === "back" ? "回译" : "翻译";
   const worker = async () => {
-    while (cursor < indexes.length) {
-      const idx = indexes[cursor++];
-      const seg = list[idx];
-      if (!seg) continue;
-      seg.status = "…"; seg.error = false; renderAll();
-      try {
-        const r = await translateSegment(seg, direction);
-        if (direction === "back") seg.back = r.text; else seg.target = r.text;
-        const same = direction === "forward" ? normalize(seg.target) === normalize(seg.source) : normalize(seg.back) === normalize(seg.target);
-        seg.status = r.lost ? "占位符丢失" : same ? "原样返回" : "";
-        seg.error = Boolean(r.lost || same);
-      } catch (e) {
-        seg.status = "失败"; seg.error = true;
-      }
+    while (cursor < tasks.length && !state.aborted) {
+      const task = tasks[cursor++];
+      await translateOne(task.seg, direction, controller.signal);
       done += 1;
-      setStatus((direction === "back" ? "回译" : "翻译") + " " + done + "/" + indexes.length);
-      renderAll(); saveSoon();
+      setStatus(label + " " + done + "/" + tasks.length + (state.aborted ? "（中断中）" : ""));
+      if (state.aborted) break;
     }
   };
   await Promise.all(Array.from({ length: limit }, worker));
   state.busy = false;
-  const failed = indexes.filter((i) => list[i] && list[i].error).length;
-  setStatus(failed ? "完成，失败 " + failed : "完成", failed > 0);
-  saveSoon();
+  state.controller = null;
+  $("abortBtn").classList.add("hidden");
+  renderAll(); saveSoon();
+  const failed = tasks.filter((t) => t.seg.error).length;
+  if (state.aborted) setStatus("已中断  点击 翻译/回译 即可续接");
+  else setStatus(failed ? "完成，失败 " + failed : "完成", failed > 0);
 }
+
+function runOn(list, indexes, direction) {
+  const tasks = indexes.map((i) => list[i]).filter(Boolean).map((seg) => ({ seg }));
+  return runTasks(tasks, direction);
+}
+
+async function runScope(direction, scope) {
+  const files = scope === "all" ? state.files.slice() : [activeFile()].filter(Boolean);
+  const tasks = [];
+  for (const file of files) {
+    for (const seg of file.segments) {
+      const input = direction === "back" ? seg.target : seg.source;
+      if (!String(input || "").trim()) continue;
+      if (isMemoHit(seg, direction)) continue;
+      tasks.push({ seg });
+    }
+  }
+  if (!tasks.length) { setStatus("没有需要处理的段落"); return; }
+  await runTasks(tasks, direction);
+}
+
+function fillBackByScope(scope) {
+  const files = scope === "all" ? state.files.slice() : [activeFile()].filter(Boolean);
+  let count = 0;
+  for (const file of files) {
+    for (const seg of file.segments) {
+      if (!String(seg.back || "").trim() && String(seg.source || "").trim()) {
+        seg.back = seg.source;
+        count += 1;
+      }
+    }
+  }
+  renderAll(); saveSoon();
+  setStatus("填充 " + count + " 条回译");
+}
+
+/* ---------- 渲染 ---------- */
 
 /* ---------- 渲染 ---------- */
 function renderRows() {
@@ -585,6 +667,16 @@ function toggleDrawer(name) {
   el.hidden = !willOpen;
   updateBubble();
   updateEdge();
+}
+
+function syncScopes() {
+  const t = $("scopeTranslate");
+  t.textContent = state.scope.translate === "all" ? "全" : "此";
+  t.classList.toggle("is-all", state.scope.translate === "all");
+  const b = $("scopeBack");
+  b.textContent = state.scope.back === "all" ? "全" : "此";
+  b.classList.toggle("is-all", state.scope.back === "all");
+  saveSoon();
 }
 
 function markThemeOption() {
@@ -850,10 +942,21 @@ function renderTree(node, container, prefix) {
   for (const file of files) {
     const item = document.createElement("li");
     item.className = "tree-file" + (file.id === state.activeFileId ? " active" : "");
-    const label = document.createElement("span");
+    const wrap = document.createElement("div");
+    wrap.className = "f-wrap";
+    const label = document.createElement("div");
     label.className = "f-name";
     label.textContent = file.name;
     label.title = file.path || file.name;
+    wrap.appendChild(label);
+    const reason = state.gapReport[file.id];
+    if (reason && reason.length) {
+      item.classList.add("f-bad");
+      const note = document.createElement("div");
+      note.className = "f-reason";
+      note.textContent = reason.join("，");
+      wrap.appendChild(note);
+    }
     const meta = document.createElement("span");
     meta.className = "f-meta";
     const done = file.segments.filter((s) => s.target).length;
@@ -868,7 +971,7 @@ function renderTree(node, container, prefix) {
       if (state.activeFileId === file.id) state.activeFileId = state.files[0] ? state.files[0].id : "";
       renderAll(); saveSoon();
     };
-    item.append(label, meta, del);
+    item.append(wrap, meta, del);
     item.onclick = () => { state.activeFileId = file.id; renderAll(); saveSoon(); };
     container.appendChild(item);
   }
@@ -934,22 +1037,175 @@ function downloadText(name, text) {
 }
 
 function openExportMenu(anchor) {
+  hideWarn();
   const menu = $("exportMenu");
   const r = anchor.getBoundingClientRect();
+  $("exportAll").hidden = !(state.view === "files" && state.files.length);
   menu.hidden = false;
   menu.style.left = Math.min(r.left, window.innerWidth - 170) + "px";
   menu.style.top = r.bottom + 6 + "px";
 }
 
+const FIELD_LABEL = { source: "原文", target: "译文", back: "回译" };
+
+function computeGaps() {
+  const fields = exportFields();
+  const report = {};
+  for (const file of state.files) {
+    const reasons = [];
+    for (const field of fields) {
+      const empty = file.segments.filter((s) => !String(s[field] || "").trim()).length;
+      if (empty) reasons.push(FIELD_LABEL[field] + " " + empty + " 处为空");
+    }
+    if (reasons.length) report[file.id] = reasons;
+  }
+  return report;
+}
+
+function hideWarn() {
+  $("exportWarn").hidden = true;
+}
+
+function makeZip(entries) {
+  const table = (() => {
+    const t = new Uint32Array(256);
+    for (let i = 0; i < 256; i += 1) {
+      let c = i;
+      for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      t[i] = c >>> 0;
+    }
+    return t;
+  })();
+  const crc32 = (bytes) => {
+    let c = 0xffffffff;
+    for (let i = 0; i < bytes.length; i += 1) c = table[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+
+  const parts = [];
+  const central = [];
+  let offset = 0;
+  for (const entry of entries) {
+    const nameBytes = new TextEncoder().encode(entry.name);
+    const data = entry.data;
+    const crc = crc32(data);
+    const local = new Uint8Array(30 + nameBytes.length);
+    const lv = new DataView(local.buffer);
+    lv.setUint32(0, 0x04034b50, true);
+    lv.setUint16(4, 20, true);
+    lv.setUint16(6, 0x0800, true);
+    lv.setUint16(8, 0, true);
+    lv.setUint32(14, crc, true);
+    lv.setUint32(18, data.length, true);
+    lv.setUint32(22, data.length, true);
+    lv.setUint16(26, nameBytes.length, true);
+    local.set(nameBytes, 30);
+    parts.push(local, data);
+
+    const cd = new Uint8Array(46 + nameBytes.length);
+    const cv = new DataView(cd.buffer);
+    cv.setUint32(0, 0x02014b50, true);
+    cv.setUint16(4, 20, true);
+    cv.setUint16(6, 20, true);
+    cv.setUint16(8, 0x0800, true);
+    cv.setUint16(10, 0, true);
+    cv.setUint32(16, crc, true);
+    cv.setUint32(20, data.length, true);
+    cv.setUint32(24, data.length, true);
+    cv.setUint16(28, nameBytes.length, true);
+    cv.setUint32(42, offset, true);
+    cd.set(nameBytes, 46);
+    central.push(cd);
+
+    offset += local.length + data.length;
+  }
+  const centralSize = central.reduce((sum, c) => sum + c.length, 0);
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(8, entries.length, true);
+  ev.setUint16(10, entries.length, true);
+  ev.setUint32(12, centralSize, true);
+  ev.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, eocd], { type: "application/zip" });
+}
+
+function exportZip(files) {
+  const usable = files.filter((f) => f.segments.some((s) => String(s.source || "").trim()));
+  if (!usable.length) { setStatus("没有可导出的文件", true); hideWarn(); return; }
+  const encoder = new TextEncoder();
+  const entries = usable.map((file) => ({
+    name: String(file.path || file.name).replace(/^\/+/, ""),
+    data: encoder.encode(buildExport(file.segments))
+  }));
+  const blob = makeZip(entries);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "transloop-export.zip";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+  setStatus("已导出 " + usable.length + " 个文件");
+  state.gapReport = {};
+  renderFiles();
+  saveSoon();
+}
+
+function tryExportAll(rect) {
+  if (!state.files.length) { setStatus("没有文件", true); return; }
+  const report = computeGaps();
+  state.gapReport = report;
+  renderFiles();
+  const badIds = Object.keys(report);
+  if (!badIds.length) { hideWarn(); exportZip(state.files); return; }
+  const rows = [];
+  for (const id of badIds) {
+    const file = state.files.find((x) => x.id === id);
+    if (!file) continue;
+    rows.push((file.path || file.name) + " · " + report[id].join("，"));
+  }
+  showWarn(rect, "all", rows, "仅导出已完成文件");
+}
+
+function doExportCurrent(list) {
+  const file = activeFile();
+  const base = state.view === "files" && file ? file.name.replace(/\.[^.]+$/, "") : "translation";
+  downloadText(base + ".txt", buildExport(list));
+  $("exportMenu").hidden = true;
+  hideWarn();
+  setStatus("已导出" + (list.length ? "（" + list.length + " 段）" : ""));
+}
+
+function showWarn(rect, mode, rows, label) {
+  state.warnMode = mode;
+  $("exportPartial").textContent = label;
+  const list = $("warnList");
+  list.innerHTML = "";
+  for (const text of rows) {
+    const row = document.createElement("div");
+    row.textContent = text;
+    list.appendChild(row);
+  }
+  const menu = $("exportWarn");
+  menu.hidden = false;
+  menu.style.left = Math.min(rect.left, window.innerWidth - 350) + "px";
+  menu.style.top = rect.bottom + 6 + "px";
+}
+
 function exportCurrent() {
   const list = currentSegments();
   if (!list.length) { setStatus("没有内容", true); return; }
-  const file = state.files.find((f) => f.id === state.activeFileId);
-  const base = state.view === "files" && file ? file.name.replace(/\.[^.]+$/, "") : "translation";
-  if (!exportFields().length) { setStatus("至少选一项", true); return; }
-  downloadText(base + ".txt", buildExport(list));
-  $("exportMenu").hidden = true;
-  setStatus("已导出");
+  const fields = exportFields();
+  if (!fields.length) { setStatus("至少选一项", true); return; }
+  const bad = [];
+  list.forEach((seg, index) => {
+    const empty = fields.filter((f) => !String(seg[f] || "").trim());
+    if (empty.length) bad.push({ index, empty });
+  });
+  if (!bad.length) { doExportCurrent(list); return; }
+  const rows = bad.slice(0, 20).map(({ index, empty }) =>
+    "第 " + (index + 1) + " 段：" + empty.map((f) => FIELD_LABEL[f]).join("、") + " 为空");
+  if (bad.length > 20) rows.push("…共 " + bad.length + " 段有空位");
+  showWarn($("exportMenu").getBoundingClientRect(), "current", rows, "仅导出已完成片段");
 }
 
 function fillBackFromSource(list) {
@@ -992,6 +1248,7 @@ function bind() {
     if (!e.target.closest("#exportMenu") && !e.target.closest("#exportText") && !e.target.closest("#exportFile")) {
       $("exportMenu").hidden = true;
     }
+    if (!e.target.closest("#exportWarn") && !e.target.closest("#exportMenu") && !e.target.closest("#exportText") && !e.target.closest("#exportFile")) hideWarn();
     const insideDrawer = e.target.closest(".drawer") || e.target.closest("#exportText") || e.target.closest("#exportFile") || e.target.closest("#exportMenu");
     const railTrigger = e.target.closest("[data-drawer]") || e.target.closest(".rail-edge") || e.target.closest("#themeBtn") || e.target.closest("#themeMenu");
     if (!insideDrawer && !railTrigger) closeDrawers();
@@ -1051,28 +1308,39 @@ function bind() {
       document.querySelectorAll(".row").forEach(fitRow);
     }).observe(tableEl);
   }
-  $("translateFile").addEventListener("click", () => {
-    const list = currentSegments();
-    runOn(list, list.map((s, i) => i), "forward");
+  $("scopeTranslate").addEventListener("click", () => {
+    state.scope.translate = state.scope.translate === "all" ? "current" : "all";
+    syncScopes();
   });
-  $("translateAllFiles").addEventListener("click", async () => {
-    if (state.busy) return;
-    for (const f of state.files) {
-      state.activeFileId = f.id;
-      renderAll();
-      const list = f.segments;
-      await runOn(list, list.map((s, i) => i), "forward");
-    }
-    setStatus("全部文件翻译完成");
+  $("scopeBack").addEventListener("click", () => {
+    state.scope.back = state.scope.back === "all" ? "current" : "all";
+    syncScopes();
   });
-  $("backFile").addEventListener("click", () => {
-    const list = currentSegments();
-    const idx = list.map((s, i) => (s.target ? i : -1)).filter((i) => i >= 0);
-    if (!idx.length) { setStatus("没有译文", true); return; }
-    runOn(list, idx, "back");
-  });
-  $("fillBackFile").addEventListener("click", () => fillBackFromSource(currentSegments()));
+  $("translateRun").addEventListener("click", () => runScope("forward", state.scope.translate));
+  $("backRun").addEventListener("click", () => runScope("back", state.scope.back));
+  $("fillBackRun").addEventListener("click", () => fillBackByScope(state.scope.back));
   $("fillBackText").addEventListener("click", () => fillBackFromSource(state.textSegments));
+  $("abortBtn").addEventListener("click", () => {
+    if (!state.busy) return;
+    state.aborted = true;
+    if (state.controller) state.controller.abort();
+    setStatus("已中断");
+  });
+  $("exportAll").addEventListener("click", (e) => {
+    e.stopPropagation();
+    tryExportAll($("exportMenu").getBoundingClientRect());
+  });
+  $("exportPartial").addEventListener("click", () => {
+    if (state.warnMode === "current") {
+      const file = activeFile();
+      const fields = exportFields();
+      const list = (file ? file.segments : []).filter((s) => fields.every((f) => String(s[f] || "").trim()));
+      doExportCurrent(list);
+    } else {
+      exportZip(state.files.filter((f) => !state.gapReport[f.id]));
+    }
+    hideWarn();
+  });
   $("clearFiles").addEventListener("click", () => {
     state.files = [];
     state.activeFileId = "";
@@ -1149,6 +1417,7 @@ renderProfiles();
 bind();
 syncSettingsForm();
 renderGlossary();
+syncScopes();
 setView(state.view);
 renderAll();
 checkApi();

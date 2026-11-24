@@ -38,6 +38,12 @@
     <label class="check"><input type="checkbox" id="expTgt" checked /> 译文</label>
     <label class="check"><input type="checkbox" id="expBack" /> 回译</label>
     <button id="expDo" class="primary">导出</button>
+    <button id="exportAll" class="ghost" hidden>导出全部</button>
+  </div>
+
+  <div class="export-warn" id="exportWarn" hidden>
+    <button id="exportPartial" class="danger">仅导出已完成的文件</button>
+    <div class="warn-list" id="warnList"></div>
   </div>
 
   <div class="theme-menu" id="themeMenu" hidden>
@@ -68,13 +74,19 @@
       <div class="actions hidden" id="fileActions">
         <button id="importBtn">导入文件</button>
         <button id="importFolder">导入文件夹</button>
-        <button id="translateFile" class="primary">翻译此文件</button>
-        <button id="translateAllFiles">翻译全部文件</button>
-        <button id="backFile">一键回译</button>
-        <button id="fillBackFile">原文填充回译</button>
+        <div class="btn-group">
+          <button id="scopeTranslate" class="scope" title="切换处理范围">此</button>
+          <button id="translateRun" class="run">一键翻译</button>
+        </div>
+        <div class="btn-group">
+          <button id="scopeBack" class="scope" title="切换处理范围">此</button>
+          <button id="backRun" class="run">一键回译</button>
+          <button id="fillBackRun" class="run soft">原文填充回译</button>
+        </div>
         <button id="exportFile" class="ghost">导出</button>
         <span id="fileName" class="file-name"></span>
       </div>
+      <button id="abortBtn" class="ghost small hidden">中断</button>
       <span class="status" id="status"></span>
     </header>
 

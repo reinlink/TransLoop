@@ -12,6 +12,8 @@
   --rail: #ffffff;
   --field: #ffffff;
   --app-bg: var(--bg);
+  --group-accent: var(--accent);
+  --group-on: #ffffff;
 }
 html[data-theme="dark"] {
   color-scheme: dark;
@@ -27,6 +29,8 @@ html[data-theme="dark"] {
   --shadow: 0 12px 34px rgba(0, 0, 0, .62);
   --rail: #100c16;
   --field: #14141b;
+  --group-accent: #a992fd;
+  --group-on: #17121f;
   --app-bg: radial-gradient(1200px 700px at 18% 0%, #2a1a3d 0%, transparent 60%),
              radial-gradient(900px 600px at 85% 100%, #221436 0%, transparent 55%),
              linear-gradient(160deg, #0b0810 0%, #120c1b 60%, #0b0810 100%);
@@ -38,6 +42,8 @@ html[data-theme="dark"] {
     --text: #ece7f5; --muted: #a08fb0; --accent: #b18cff; --accent-weak: #241a35;
     --danger: #ff8a8a; --shadow: 0 12px 34px rgba(0,0,0,.62); --rail: #100c16;
     --field: #14141b;
+    --group-accent: #a992fd;
+    --group-on: #17121f;
     --app-bg: radial-gradient(1200px 700px at 18% 0%, #2a1a3d 0%, transparent 60%),
              radial-gradient(900px 600px at 85% 100%, #221436 0%, transparent 55%),
              linear-gradient(160deg, #0b0810 0%, #120c1b 60%, #0b0810 100%);
@@ -90,6 +96,44 @@ select, input[type=text], input[type=password], input[type=number], textarea {
 .pair select { padding: 5px 6px; }
 .actions { display: flex; gap: 6px; }
 .status { margin-left: auto; color: var(--muted); font-size: 12px; }
+.btn-group {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px;
+  border: 1px solid color-mix(in srgb, var(--group-accent) 45%, var(--line));
+  border-radius: 11px; background: color-mix(in srgb, var(--group-accent) 8%, transparent);
+}
+.btn-group .scope {
+  min-width: 30px; height: 28px; padding: 0 6px; border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--group-accent) 55%, var(--line));
+  background: transparent; color: var(--text); font-size: 13px; font-weight: 600;
+}
+.btn-group .scope.is-all { border-color: var(--group-accent); color: var(--group-accent); }
+.btn-group .run {
+  height: 28px; padding: 0 12px; border-radius: 8px; border: 0;
+  background: var(--group-accent); color: var(--group-on); font-weight: 600;
+}
+.btn-group .run.soft { background: color-mix(in srgb, var(--group-accent) 22%, transparent); color: var(--text); }
+.btn-group .run:hover { filter: brightness(1.05); }
+button.small { padding: 4px 10px; font-size: 12px; }
+
+.export-warn {
+  position: fixed; z-index: 70; min-width: 240px; max-width: 340px; padding: 10px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px;
+}
+.export-warn[hidden] { display: none; }
+.export-warn .danger {
+  background: #7f1d1d; border-color: #7f1d1d; color: #ffe4e6; font-weight: 600;
+  padding: 8px 10px; border-radius: 8px; font-size: 13px;
+}
+.export-warn .danger:hover { background: #991b1b; }
+.warn-list { font-size: 12px; color: #f87171; line-height: 1.5; max-height: 160px; overflow: auto; }
+.warn-list div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.tree-file.f-bad .f-name { color: #f87171; }
+.tree-file.f-bad .f-reason { display: block; font-size: 11px; color: #f87171; margin-top: 1px; }
+.tree-file .f-reason { display: none; }
+.tree-file .f-wrap { flex: 1; min-width: 0; }
+
 .file-name {
   align-self: center; max-width: 320px; font-size: 12px; font-weight: 600; color: var(--text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
