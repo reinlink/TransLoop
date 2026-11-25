@@ -415,7 +415,11 @@ function memoKey(seg, direction) {
 }
 
 function isMemoHit(seg, direction) {
-  return Boolean(seg.memo && seg.memo[direction] === memoKey(seg, direction));
+  const entry = seg.memo && seg.memo[direction];
+  if (!entry || typeof entry !== "object") return false;
+  if (entry.key !== memoKey(seg, direction)) return false;
+  const current = direction === "back" ? seg.back : seg.target;
+  return String(current ?? "") === String(entry.value ?? "");
 }
 
 async function translateOne(seg, direction, signal) {
@@ -429,7 +433,10 @@ async function translateOne(seg, direction, signal) {
       : normalize(seg.back) === normalize(seg.target);
     seg.status = r.lost ? "占位符丢失" : same ? "原样返回" : "";
     seg.error = Boolean(r.lost || same);
-    seg.memo = { ...(seg.memo || {}), [direction]: memoKey(seg, direction) };
+    seg.memo = {
+      ...(seg.memo || {}),
+      [direction]: { key: memoKey(seg, direction), value: direction === "back" ? seg.back : seg.target }
+    };
   } catch (e) {
     if (e && e.name === "AbortError") { seg.status = "已中断"; return; }
     seg.status = "失败"; seg.error = true;
